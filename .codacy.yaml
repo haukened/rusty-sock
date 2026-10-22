@@ -1,0 +1,17 @@
+---
+engines:
+  clippy:
+    enabled: true
+  lizard:
+    enabled: true
+  metric:
+    enabled: true
+  duplication:
+    enabled: true
+    exclude_paths:
+      - "tests/**"
+exclude_paths:
+  - "fuzz/**"
+  - "target/**"
+  - "tests/**"
+  - "**/*.md"

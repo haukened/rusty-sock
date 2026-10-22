@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cargo-zigbuild (bundles zig)
+        run: pip install cargo-zigbuild ziglang
+      - run: cargo zigbuild --locked --release --target ${{ matrix.target }}
+      - run: scripts/check-static.sh target/${{ matrix.target }}/release/rusty-sock
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/rusty-sock dist/rusty-sock-${{ matrix.target }}
+          cd dist && sha256sum rusty-sock-${{ matrix.target }} > rusty-sock-${{ matrix.target }}.sha256
+      - name: Smoke-test scratch image
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          docker build -t rusty-sock:ci .
+          docker run --rm rusty-sock:ci --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

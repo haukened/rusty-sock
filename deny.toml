@@ -1,0 +1,43 @@
+# cargo-deny policy: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "AGPL-3.0-only",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Keep the dependency tree pure Rust (plus ring) so musl builds stay fully
+# static and reproducible.
+deny = [
+  { crate = "openssl", reason = "C dependency; use rustls" },
+  { crate = "openssl-sys", reason = "C dependency; use rustls" },
+  { crate = "native-tls", reason = "C dependency; use rustls" },
+  { crate = "aws-lc-rs", reason = "needs cmake; complicates static musl builds" },
+  { crate = "aws-lc-sys", reason = "needs cmake; complicates static musl builds" },
+  { crate = "libgssapi", reason = "links system Kerberos; not static" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

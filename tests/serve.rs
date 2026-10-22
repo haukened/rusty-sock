@@ -7,15 +7,14 @@ mod common;
 use common::*;
 use rusty_sock::config::Config;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("rusty-sock-serve-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn temp_dir(_tag: &str) -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
 }
 
 #[tokio::test]
 async fn serves_from_config_file() {
-    let dir = temp_dir("ok");
+    let dir_guard = temp_dir("ok");
+    let dir = dir_guard.path().to_path_buf();
     let hash = rusty_sock::auth::hash_password(PASS.as_bytes()).unwrap();
     std::fs::write(dir.join("users"), format!("{USER}:{hash}\n")).unwrap();
     let (cert, key) = self_signed();
@@ -48,7 +47,8 @@ async fn serve_without_auth() {
 
 #[tokio::test]
 async fn build_errors() {
-    let dir = temp_dir("err");
+    let dir_guard = temp_dir("err");
+    let dir = dir_guard.path().to_path_buf();
     let mut config = Config::parse("[auth]\nusers_file = \"missing\"\n").unwrap();
     config.auth.users_file = Some(dir.join("missing"));
     assert!(matches!(
@@ -83,7 +83,8 @@ async fn build_errors() {
 
 #[tokio::test]
 async fn empty_users_file_starts_with_warning() {
-    let dir = temp_dir("empty");
+    let dir_guard = temp_dir("empty");
+    let dir = dir_guard.path().to_path_buf();
     std::fs::write(dir.join("users"), "# no users yet\n").unwrap();
     let mut config = Config::parse("listen = \"127.0.0.1:0\"\n").unwrap();
     config.auth.users_file = Some(dir.join("users"));

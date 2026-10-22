@@ -10,7 +10,7 @@ use rustls_pki_types::ServerName;
 #[tokio::test]
 async fn socks_over_tls() {
     let (cert, key) = self_signed();
-    let tls_cfg = write_tls_files("listener", &cert, &key);
+    let (_dir, tls_cfg) = write_tls_files(&cert, &key);
     let acceptor = rusty_sock::tls::acceptor(&tls_cfg).unwrap();
     let upstream = http_server("127.0.0.1:0").await;
     let proxy = start(ctx(password_auth()), Some(acceptor), 16).await;
@@ -33,7 +33,7 @@ async fn socks_over_tls() {
 async fn plaintext_client_rejected_by_tls_listener() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (cert, key) = self_signed();
-    let acceptor = rusty_sock::tls::acceptor(&write_tls_files("reject", &cert, &key)).unwrap();
+    let acceptor = rusty_sock::tls::acceptor(&write_tls_files(&cert, &key).1).unwrap();
     let proxy = start(ctx(password_auth()), Some(acceptor), 16).await;
     let mut tcp = tokio::net::TcpStream::connect(proxy.addr).await.unwrap();
     tcp.write_all(&[5, 1, 2]).await.unwrap();
@@ -45,7 +45,7 @@ async fn plaintext_client_rejected_by_tls_listener() {
 #[tokio::test]
 async fn tls_handshake_timeout() {
     let (cert, key) = self_signed();
-    let acceptor = rusty_sock::tls::acceptor(&write_tls_files("timeout", &cert, &key)).unwrap();
+    let acceptor = rusty_sock::tls::acceptor(&write_tls_files(&cert, &key).1).unwrap();
     let mut c = ctx(password_auth());
     c.timeouts.handshake = SHORT;
     let proxy = start(c, Some(acceptor), 16).await;

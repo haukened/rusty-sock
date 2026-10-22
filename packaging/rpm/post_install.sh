@@ -1,3 +1,4 @@
+#!/bin/sh
 # $1: 1 on first install, >1 on upgrade.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || :

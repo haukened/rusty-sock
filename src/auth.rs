@@ -241,8 +241,8 @@ mod tests {
     #[test]
     fn load_from_file() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("rusty-sock-auth-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_guard = tempfile::tempdir().unwrap();
+        let dir = dir_guard.path().to_path_buf();
         let path = dir.join("users");
         std::fs::write(&path, format!("alice:{}\n", *ALICE_HASH)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -255,6 +255,5 @@ mod tests {
             CredentialStore::load(&dir.join("missing")),
             Err(AuthError::Io(_))
         ));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

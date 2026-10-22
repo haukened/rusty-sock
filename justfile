@@ -23,7 +23,7 @@ deny:
 
 # Fuzz one parser (greeting, userpass, request, udp). Needs nightly.
 fuzz target="request" secs="60":
-    cargo +nightly fuzz run {{target}} -- -max_total_time={{secs}}
+    cargo +nightly fuzz run --target x86_64-unknown-linux-gnu {{target}} -- -max_total_time={{secs}}
 
 # Fully static binaries for x86_64 and aarch64 (needs cargo-zigbuild).
 static:

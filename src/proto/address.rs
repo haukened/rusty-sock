@@ -97,12 +97,15 @@ pub fn write_socket_addr(addr: SocketAddr, out: &mut Vec<u8>) {
     out.extend_from_slice(&addr.port().to_be_bytes());
 }
 
+/// Punctuation allowed in hostnames besides ASCII letters and digits.
+const HOSTNAME_PUNCTUATION: &[u8] = b"-_.";
+
 /// Accept only non-empty hostnames made of letters, digits, `-`, `_` and `.`.
 fn validate_domain(raw: &[u8]) -> Result<String, ProtoError> {
     let valid = !raw.is_empty()
         && raw
             .iter()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+            .all(|b| b.is_ascii_alphanumeric() || HOSTNAME_PUNCTUATION.contains(b));
     if !valid {
         return Err(ProtoError::InvalidDomain);
     }

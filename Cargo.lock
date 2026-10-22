@@ -1373,6 +1373,7 @@ dependencies = [
  "serde",
  "socket2",
  "subtle",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",

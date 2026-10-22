@@ -61,16 +61,14 @@ pub fn resolve(
 mod tests {
     use super::*;
 
-    fn temp_creds(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("rusty-sock-creds-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_creds() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
     fn explicit_wins() {
-        let dir = temp_creds("explicit");
+        let guard = temp_creds();
+        let dir = guard.path().to_path_buf();
         std::fs::write(dir.join(CRED_USERS), "").unwrap();
         let got = resolve(
             Some(Path::new("/x/users")),
@@ -83,7 +81,8 @@ mod tests {
 
     #[test]
     fn credential_before_default() {
-        let dir = temp_creds("cred");
+        let guard = temp_creds();
+        let dir = guard.path().to_path_buf();
         std::fs::write(dir.join(CRED_USERS), "").unwrap();
         assert_eq!(
             resolve(None, CRED_USERS, DEFAULT_USERS, Some(&dir)),
@@ -93,7 +92,8 @@ mod tests {
 
     #[test]
     fn missing_credential_falls_back() {
-        let dir = temp_creds("missing");
+        let guard = temp_creds();
+        let dir = guard.path().to_path_buf();
         let got = resolve(None, CRED_TLS_KEY, DEFAULT_TLS_KEY, Some(&dir));
         assert_eq!(got, PathBuf::from(DEFAULT_TLS_KEY));
         assert_eq!(

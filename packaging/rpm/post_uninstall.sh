@@ -1,3 +1,4 @@
+#!/bin/sh
 # $1: 0 on erase, >0 on upgrade.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || :

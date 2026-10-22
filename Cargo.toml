@@ -39,6 +39,7 @@ zeroize = "1"
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 tokio = { version = "1", features = ["test-util"] }
 

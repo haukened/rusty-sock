@@ -11,6 +11,8 @@ engines:
     exclude_paths:
       - "tests/**"
 exclude_paths:
+  - "Cargo.lock"
+  - "fuzz/Cargo.lock"
   - "fuzz/**"
   - "target/**"
   - "tests/**"

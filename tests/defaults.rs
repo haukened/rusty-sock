@@ -25,11 +25,8 @@ impl Drop for Proxy {
     }
 }
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("rusty-sock-defaults-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn temp_dir(_tag: &str) -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
 }
 
 /// Start the binary and return it once it logs its listening address.
@@ -45,7 +42,8 @@ fn spawn(config: &std::path::Path, creds: &std::path::Path) -> (Proxy, SocketAdd
         .unwrap();
     let stdout = child.stdout.take().unwrap();
     let proxy = Proxy(child);
-    for line in BufReader::new(stdout).lines() {
+    let mut lines = BufReader::new(stdout).lines();
+    for line in lines.by_ref() {
         let line = line.unwrap();
         assert!(
             !line.contains('\u{1b}'),
@@ -53,6 +51,8 @@ fn spawn(config: &std::path::Path, creds: &std::path::Path) -> (Proxy, SocketAdd
         );
         if let Some(addr) = line.split("addr=").nth(1) {
             let addr = addr.split_whitespace().next().unwrap().parse().unwrap();
+            // Keep draining so later log lines don't hit a closed pipe.
+            std::thread::spawn(move || lines.for_each(drop));
             return (proxy, addr);
         }
     }
@@ -61,7 +61,8 @@ fn spawn(config: &std::path::Path, creds: &std::path::Path) -> (Proxy, SocketAdd
 
 #[tokio::test]
 async fn users_come_from_credentials_directory() {
-    let dir = temp_dir("creds");
+    let dir_guard = temp_dir("creds");
+    let dir = dir_guard.path().to_path_buf();
     let creds = dir.join("creds");
     std::fs::create_dir_all(&creds).unwrap();
     let hash = rusty_sock::auth::hash_password(PASS.as_bytes()).unwrap();

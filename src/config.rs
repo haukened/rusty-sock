@@ -318,16 +318,14 @@ mod tests {
         assert_eq!(tls.cert, PathBuf::from(paths::DEFAULT_TLS_CERT));
         assert_eq!(tls.key, PathBuf::from(paths::DEFAULT_TLS_KEY));
 
-        let creds =
-            std::env::temp_dir().join(format!("rusty-sock-cfg-creds-{}", std::process::id()));
-        std::fs::create_dir_all(&creds).unwrap();
+        let creds_guard = tempfile::tempdir().unwrap();
+        let creds = creds_guard.path().to_path_buf();
         std::fs::write(creds.join(paths::CRED_TLS_KEY), "").unwrap();
         std::fs::write(creds.join(paths::CRED_USERS), "").unwrap();
         let tls = c.tls_paths(Some(&creds)).unwrap();
         assert_eq!(tls.cert, PathBuf::from(paths::DEFAULT_TLS_CERT));
         assert_eq!(tls.key, creds.join(paths::CRED_TLS_KEY));
         assert_eq!(c.users_file(Some(&creds)), creds.join(paths::CRED_USERS));
-        std::fs::remove_dir_all(&creds).unwrap();
     }
 
     #[test]
@@ -418,8 +416,8 @@ mod tests {
 
     #[test]
     fn load_resolves_relative_paths() {
-        let dir = std::env::temp_dir().join(format!("rusty-sock-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir_guard = tempfile::tempdir().unwrap();
+        let dir = dir_guard.path().to_path_buf();
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
@@ -435,6 +433,5 @@ mod tests {
             Config::load(&dir.join("missing")),
             Err(ConfigError::Io(_))
         ));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

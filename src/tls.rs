@@ -63,9 +63,9 @@ pub(crate) mod tests {
     use std::path::PathBuf;
 
     /// Write a self-signed cert for `localhost` into a fresh temp dir.
-    pub(crate) fn self_signed(tag: &str) -> (TlsConfig, String) {
-        let dir = std::env::temp_dir().join(format!("rusty-sock-tls-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    pub(crate) fn self_signed() -> (tempfile::TempDir, TlsConfig, String) {
+        let guard = tempfile::tempdir().unwrap();
+        let dir = guard.path();
         let key = rcgen::KeyPair::generate().unwrap();
         let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
             .unwrap()
@@ -77,18 +77,18 @@ pub(crate) mod tests {
         };
         std::fs::write(&cfg.cert, cert.pem()).unwrap();
         std::fs::write(&cfg.key, key.serialize_pem()).unwrap();
-        (cfg, cert.pem())
+        (guard, cfg, cert.pem())
     }
 
     #[test]
     fn builds_acceptor() {
-        let (cfg, _) = self_signed("ok");
+        let (_cfg_dir, cfg, _) = self_signed();
         assert!(acceptor(&cfg).is_ok());
     }
 
     #[test]
     fn reports_errors() {
-        let (cfg, _) = self_signed("err");
+        let (_cfg_dir, cfg, _) = self_signed();
         let missing = TlsConfig {
             cert: PathBuf::from("/nonexistent/c.pem"),
             key: cfg.key.clone(),
@@ -112,7 +112,7 @@ pub(crate) mod tests {
         };
         assert!(matches!(acceptor(&no_key), Err(TlsError::Pem { .. })));
 
-        let (other, _) = self_signed("other");
+        let (_other_dir, other, _) = self_signed();
         let mismatch = TlsConfig {
             cert: cfg.cert.clone(),
             key: other.key,
@@ -122,7 +122,7 @@ pub(crate) mod tests {
 
     #[test]
     fn corrupt_cert_pem() {
-        let (cfg, _) = self_signed("corrupt");
+        let (_cfg_dir, cfg, _) = self_signed();
         std::fs::write(
             &cfg.cert,
             "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n",

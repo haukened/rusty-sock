@@ -230,16 +230,20 @@ pub fn self_signed() -> (String, String) {
 }
 
 /// Write PEMs into a temp dir and return a [`rusty_sock::config::TlsConfig`].
-pub fn write_tls_files(tag: &str, cert: &str, key: &str) -> rusty_sock::config::TlsConfig {
-    let dir = std::env::temp_dir().join(format!("rusty-sock-it-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+/// The returned guard deletes the directory when dropped.
+pub fn write_tls_files(
+    cert: &str,
+    key: &str,
+) -> (tempfile::TempDir, rusty_sock::config::TlsConfig) {
+    let guard = tempfile::tempdir().unwrap();
+    let dir = guard.path();
     let cfg = rusty_sock::config::TlsConfig {
         cert: dir.join("cert.pem"),
         key: dir.join("key.pem"),
     };
     std::fs::write(&cfg.cert, cert).unwrap();
     std::fs::write(&cfg.key, key).unwrap();
-    cfg
+    (guard, cfg)
 }
 
 /// A TLS client connector that trusts exactly `cert_pem`.
@@ -261,7 +265,7 @@ pub fn tls_connector(cert_pem: &str) -> tokio_rustls::TlsConnector {
 
 /// An HTTPS server (TLS + the same HTTP response).
 pub async fn https_server(cert_pem: &str, key_pem: &str) -> SocketAddr {
-    let cfg = write_tls_files("https-upstream", cert_pem, key_pem);
+    let (_dir, cfg) = write_tls_files(cert_pem, key_pem);
     let acceptor = rusty_sock::tls::acceptor(&cfg).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

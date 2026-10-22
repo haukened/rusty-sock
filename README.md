@@ -15,11 +15,8 @@ Yet another Rust implementation of a SOCKS5 proxy. This one is small, has secure
 ```sh
 cargo build --release
 
-# Create a users file (one `user:$argon2id$...` line per user).
-printf '%s\n' 'correct horse battery staple' \
-  | ./target/release/rusty-sock hash-password \
-  | sed 's/^/alice:/' > users
-chmod 600 users
+# Create a users file with one user (prompts for the password twice).
+./target/release/rusty-sock user create alice --users-file users
 
 cp config.example.toml config.toml   # points at ./users
 ./target/release/rusty-sock serve --config config.toml
@@ -36,8 +33,8 @@ Release builds include `.deb` (Debian 12+, Ubuntu 22.04+) and `.rpm` (RHEL/Rocky
 ```sh
 sudo apt install ./rusty-sock_*_amd64.deb      # or: sudo dnf install ./rusty-sock-*.x86_64.rpm
 
-# Add a user (the users file is root-only, 0600):
-echo "alice:$(printf '%s\n' 'the-password' | rusty-sock hash-password)" | sudo tee -a /etc/rusty-sock/users
+# Add a user (prompts for the password twice; the users file stays root-only 0600):
+sudo rusty-sock user create alice
 
 sudo systemctl enable --now rusty-sock      # installed disabled; nothing runs until you do this
 journalctl -u rusty-sock
@@ -50,6 +47,20 @@ journalctl -u rusty-sock
 | `/etc/rusty-sock/tls/{cert,key}.pem` | TLS material, if enabled |
 | `/usr/lib/systemd/system/rusty-sock.service` | hardened unit |
 | `/usr/share/doc/rusty-sock/dropins/` | optional drop-ins: `tls.conf`, `low-port.conf` |
+
+### Managing users
+
+```sh
+sudo rusty-sock user create alice     # prompt + confirm, no echo
+sudo rusty-sock user update alice     # change the password
+sudo rusty-sock user delete alice
+sudo rusty-sock user list             # names only, never hashes
+```
+
+- **Applying changes.** The running service reads the users file only at start-up. After a change the command prints a restart hint; add `--restart` to restart the service yourself (only if it's already running; a stopped service is never started).
+- **Scripts.** `--password-stdin` reads the password from one line of stdin instead of prompting, e.g. `printf '%s\n' "$PW" | sudo rusty-sock user create ci --password-stdin`.
+- **Which file.** By default the command edits `auth.users_file` from `/etc/rusty-sock/config.toml`, or `/etc/rusty-sock/users`. Override with `--users-file PATH` or `-c CONFIG`.
+- **Safe edits.** Edits keep comments and ordering. The file is replaced atomically and keeps its owner and mode, and a malformed users file is refused rather than rewritten.
 
 Logs go to stdout. Under systemd they land in the journal, without colour codes or duplicate timestamps.
 

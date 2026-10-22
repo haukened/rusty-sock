@@ -336,3 +336,56 @@ pub fn dns_query(id: u16, name: &str) -> Vec<u8> {
 }
 
 pub const SHORT: Duration = Duration::from_millis(300);
+
+/// A running `rusty-sock serve` child process; stopped with SIGTERM on drop.
+pub struct Proxy(std::process::Child);
+
+impl Drop for Proxy {
+    /// Stop with SIGTERM (graceful shutdown path), falling back to SIGKILL.
+    fn drop(&mut self) {
+        let term = std::process::Command::new("kill")
+            .args(["-TERM", &self.0.id().to_string()])
+            .status();
+        if !term.is_ok_and(|s| s.success()) {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
+/// Start `rusty-sock serve -c <config>` and return it once it is listening.
+/// `creds` sets `CREDENTIALS_DIRECTORY`.
+pub fn spawn_server(
+    config: &std::path::Path,
+    creds: Option<&std::path::Path>,
+) -> (Proxy, SocketAddr) {
+    use std::io::{BufRead, BufReader};
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_rusty-sock"));
+    cmd.args(["serve", "-c"])
+        .arg(config)
+        .env_remove("CREDENTIALS_DIRECTORY")
+        .env("JOURNAL_STREAM", "8:1234")
+        .env("RUST_LOG", "info")
+        .stdout(std::process::Stdio::piped());
+    if let Some(dir) = creds {
+        cmd.env("CREDENTIALS_DIRECTORY", dir);
+    }
+    let mut child = cmd.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let proxy = Proxy(child);
+    let mut lines = BufReader::new(stdout).lines();
+    for line in lines.by_ref() {
+        let line = line.unwrap();
+        assert!(
+            !line.contains('\u{1b}'),
+            "no ANSI codes when not a terminal: {line}"
+        );
+        if let Some(addr) = line.split("addr=").nth(1) {
+            let addr = addr.split_whitespace().next().unwrap().parse().unwrap();
+            // Keep draining so later log lines don't hit a closed pipe.
+            std::thread::spawn(move || lines.for_each(drop));
+            return (proxy, addr);
+        }
+    }
+    panic!("server exited before listening");
+}

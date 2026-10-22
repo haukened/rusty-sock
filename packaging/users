@@ -1,9 +1,11 @@
 # rusty-sock users: one `username:argon2id-hash` entry per line.
 #
-# Create a hash (reads the password from stdin):
-#   printf '%s\n' 'the-password' | rusty-sock hash-password
-# and append it, e.g.:
-#   echo "alice:$(printf '%s\n' 'the-password' | rusty-sock hash-password)" >> /etc/rusty-sock/users
+# Manage entries with the built-in command (prompts for the password twice):
+#   sudo rusty-sock user create alice
+#   sudo rusty-sock user update alice
+#   sudo rusty-sock user delete alice
+#   sudo rusty-sock user list
+# Add --restart to apply the change to a running service immediately.
 #
 # Keep this file root-owned with mode 0600; the service reads it through
-# systemd's LoadCredential. Restart the service after editing.
+# systemd's LoadCredential. Changes take effect when the service restarts.

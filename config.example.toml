@@ -8,8 +8,8 @@ listen = "127.0.0.1:1080"
 [auth]
 # "password" (RFC 1929, default) or "none".
 mode = "password"
-# One `username:$argon2id$...` line per user; create entries with
-#   printf '%s\n' 'the-password' | rusty-sock hash-password
+# One `username:$argon2id$...` line per user; manage entries with
+#   rusty-sock user {create,update,delete,list} [--users-file PATH]
 # Default: the systemd `users` credential if present, else
 # /etc/rusty-sock/users.
 users_file = "users"

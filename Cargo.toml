@@ -18,12 +18,11 @@ name = "rusty-sock"
 path = "src/main.rs"
 
 [dependencies]
-argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash", "rand", "std"] }
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "getrandom", "password-hash"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
 ipnet = "2"
-password-hash = { version = "0.5", features = ["getrandom"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["derive"] }

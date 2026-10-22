@@ -5,9 +5,7 @@
 
 use std::path::Path;
 
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use password_hash::rand_core::OsRng;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash};
 use subtle::ConstantTimeEq;
 
 /// Errors loading or creating credentials.
@@ -129,8 +127,7 @@ fn parse_line(line: &str) -> Result<Entry, &'static str> {
 }
 
 fn verify_hash(hash: &str, password: &[u8]) -> bool {
-    PasswordHash::new(hash)
-        .is_ok_and(|parsed| Argon2::default().verify_password(password, &parsed).is_ok())
+    Argon2::default().verify_password(password, hash).is_ok()
 }
 
 /// Hash a password with Argon2id and a random salt, returning a PHC string.
@@ -138,9 +135,9 @@ fn verify_hash(hash: &str, password: &[u8]) -> bool {
 /// # Errors
 /// Returns [`AuthError::Hash`] if hashing fails.
 pub fn hash_password(password: &[u8]) -> Result<String, AuthError> {
-    let salt = SaltString::generate(&mut OsRng);
+    // The salt comes from the OS RNG (getrandom).
     Argon2::default()
-        .hash_password(password, &salt)
+        .hash_password(password)
         .map(|h| h.to_string())
         .map_err(AuthError::Hash)
 }
@@ -224,6 +221,28 @@ mod tests {
         let text = format!("alice:{h}\nalice:{h}\n", h = *ALICE_HASH);
         let err = CredentialStore::parse(&text).unwrap_err();
         assert_eq!(err.to_string(), "users file line 2: duplicate username");
+    }
+
+    /// Hash produced by the released v0.1.0 binary (argon2 0.5). Users files
+    /// written by older releases must keep working after dependency bumps.
+    const V0_1_0_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$cN5shZgLnWaeQebxr1a3YA$YJ0hYIh+wyAXKZU9YdVo1D8wXErBChlc+rGVtNde3xo";
+
+    #[test]
+    fn verifies_hashes_from_v0_1_0() {
+        let s = CredentialStore::parse(&format!("old:{V0_1_0_HASH}")).unwrap();
+        assert!(s.verify(b"old", b"compat-password"));
+        assert!(!s.verify(b"old", b"wrong"));
+    }
+
+    #[test]
+    fn new_hashes_use_same_parameters() {
+        // Same algorithm and cost as v0.1.0, so timing for unknown users (the
+        // dummy hash) matches real users.
+        let hash = hash_password(b"x").unwrap();
+        assert!(
+            hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
+            "{hash}"
+        );
     }
 
     #[test]

@@ -1,0 +1,57 @@
+[Unit]
+Description=rusty-sock SOCKS5 proxy
+Documentation=file:///usr/share/doc/rusty-sock/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/rusty-sock serve --config /etc/rusty-sock/config.toml
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=65536
+UMask=0077
+
+# Run as an ephemeral, unprivileged user. Root-owned secrets (0600) are
+# handed over via systemd credentials ($CREDENTIALS_DIRECTORY), which
+# rusty-sock checks before /etc/rusty-sock/.
+DynamicUser=yes
+LoadCredential=users:/etc/rusty-sock/users
+
+# No capabilities: the default port (1080) needs none. For ports < 1024
+# see /usr/share/doc/rusty-sock/dropins/low-port.conf.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Filesystem, devices and kernel.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+PrivateUsers=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# Process and syscall restrictions. Only IP sockets are needed; logs go to
+# stdout, which systemd connects to the journal.
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -24,7 +24,7 @@ pub enum Command {
     /// Run the proxy server.
     Serve {
         /// Path to the TOML config file.
-        #[arg(short, long)]
+        #[arg(short, long, default_value = crate::paths::DEFAULT_CONFIG)]
         config: PathBuf,
     },
     /// Read a password from stdin and print an Argon2id hash for the users file.
@@ -79,6 +79,10 @@ mod tests {
         let cli = Cli::try_parse_from(["rusty-sock", "serve", "-c", "x.toml"]).unwrap();
         assert!(
             matches!(cli.command, Command::Serve { config } if config.as_path() == std::path::Path::new("x.toml"))
+        );
+        let cli = Cli::try_parse_from(["rusty-sock", "serve"]).unwrap();
+        assert!(
+            matches!(cli.command, Command::Serve { config } if config.as_path() == std::path::Path::new(crate::paths::DEFAULT_CONFIG))
         );
         let cli = Cli::try_parse_from(["rusty-sock", "hash-password"]).unwrap();
         assert!(matches!(cli.command, Command::HashPassword));

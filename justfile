@@ -33,3 +33,19 @@ static:
 # Scratch container image from the x86_64 static binary.
 docker: static
     docker build -t rusty-sock .
+
+# .deb and .rpm from the x86_64 static binary (needs cargo-zigbuild,
+# cargo-deb and cargo-generate-rpm).
+packages:
+    cargo zigbuild --release --target x86_64-unknown-linux-musl
+    cargo deb --no-build --no-strip --target x86_64-unknown-linux-musl
+    cargo generate-rpm --target x86_64-unknown-linux-musl
+
+# Install/remove the packages in distro containers (needs docker).
+package-smoke: packages
+    for img in debian:12 ubuntu:22.04 ubuntu:24.04; do docker run --rm -v "$PWD/$(ls target/x86_64-unknown-linux-musl/debian/*.deb):/pkg/r.deb:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/r.deb; done
+    for img in rockylinux:9 fedora:latest; do docker run --rm -v "$PWD/$(ls target/x86_64-unknown-linux-musl/generate-rpm/*.rpm):/pkg/r.rpm:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/r.rpm; done
+
+# Full systemd test on this machine: installs and purges the .deb (sudo).
+package-e2e: packages
+    sudo scripts/package-e2e.sh target/x86_64-unknown-linux-musl/debian/*.deb

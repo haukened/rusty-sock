@@ -29,7 +29,51 @@ curl -x socks5h://alice:'correct horse battery staple'@127.0.0.1:1080 https://ex
 
 Logging is controlled with `RUST_LOG` (default `info`), e.g. `RUST_LOG=rusty_sock=debug`.
 
+## Install from packages (systemd)
+
+Release builds include `.deb` (Debian 12+, Ubuntu 22.04+) and `.rpm` (RHEL/Rocky/Alma 9+, Fedora) packages built from the static binary. They need systemd ≥ 247.
+
+```sh
+sudo apt install ./rusty-sock_*_amd64.deb      # or: sudo dnf install ./rusty-sock-*.x86_64.rpm
+
+# Add a user (the users file is root-only, 0600):
+echo "alice:$(printf '%s\n' 'the-password' | rusty-sock hash-password)" | sudo tee -a /etc/rusty-sock/users
+
+sudo systemctl enable --now rusty-sock      # installed disabled; nothing runs until you do this
+journalctl -u rusty-sock
+```
+
+| Path | Purpose |
+|---|---|
+| `/etc/rusty-sock/config.toml` | config (conffile, kept on upgrade) |
+| `/etc/rusty-sock/users` | users, `root:root 0600` (conffile) |
+| `/etc/rusty-sock/tls/{cert,key}.pem` | TLS material, if enabled |
+| `/usr/lib/systemd/system/rusty-sock.service` | hardened unit |
+| `/usr/share/doc/rusty-sock/dropins/` | optional drop-ins: `tls.conf`, `low-port.conf` |
+
+Logs go to stdout. Under systemd they land in the journal, without colour codes or duplicate timestamps.
+
+### How the service is sandboxed
+
+- **No fixed account.** `DynamicUser=yes` runs the service as an ephemeral user that exists only while it runs, so the package creates no account.
+- **Secrets stay root-only.** The users file (and the TLS key, if used) stays `root:root 0600`. systemd passes it in with `LoadCredential=`, which exposes a private copy under `$CREDENTIALS_DIRECTORY` to that run only.
+- **No capabilities.** The bounding and ambient capability sets are empty, and `NoNewPrivileges=yes` is set.
+- **Filesystem and kernel locked down.** The service gets a read-only OS, private `/tmp`, no devices, protected kernel tunables, modules, logs and clock, and its own user namespace.
+- **Restricted system calls.** Only IPv4/IPv6 sockets are allowed, with a `@system-service` syscall filter that also excludes `@privileged` and `@resources`. `MemoryDenyWriteExecute=yes` blocks writable-executable memory, and `LockPersonality=yes` stops the process changing its execution domain.
+- **Exposure score.** `systemd-analyze security rusty-sock` reports **1.1 (OK)**, and CI fails if it rises above 2.0. The only remaining items are inherent to a network proxy (it needs internet sockets and the host network).
+
+**Enabling TLS.** Put the certificate and key in `/etc/rusty-sock/tls/` (both `0600`). Copy `/usr/share/doc/rusty-sock/dropins/tls.conf` to `/etc/systemd/system/rusty-sock.service.d/`, add an empty `[tls]` section to the config, then run `systemctl daemon-reload` and `systemctl restart rusty-sock`.
+
+**Listening below port 1024.** Install the `low-port.conf` drop-in. It grants `CAP_NET_BIND_SERVICE` and nothing else.
+
 ## Configuration
+
+`rusty-sock serve` reads `/etc/rusty-sock/config.toml` unless `-c/--config PATH` is given.
+
+Secret files are found in this order:
+1. a path set explicitly in the config;
+2. a systemd credential (`$CREDENTIALS_DIRECTORY/users`, `tls-cert` or `tls-key`);
+3. the default under `/etc/rusty-sock/`.
 
 See [`config.example.toml`](config.example.toml) for every option. Unknown keys are rejected. Relative paths are resolved against the config file's directory.
 
@@ -37,9 +81,9 @@ See [`config.example.toml`](config.example.toml) for every option. Unknown keys 
 |---|---|---|---|
 | | `listen` | `127.0.0.1:1080` | |
 | `[auth]` | `mode` | `password` | `password` or `none` |
-| | `users_file` | — | required for `password` |
+| | `users_file` | `/etc/rusty-sock/users` | or the `users` credential |
 | | `allow_open_proxy` | `false` | needed for `mode = "none"` on a non-loopback address |
-| `[tls]` | `cert`, `key` | — | PEM files; enables SOCKS over TLS |
+| `[tls]` | `cert`, `key` | `/etc/rusty-sock/tls/{cert,key}.pem` | section presence enables SOCKS over TLS; or `tls-cert`/`tls-key` credentials |
 | `[limits]` | `max_connections` | `1024` | extra connections are dropped |
 | | `handshake_timeout_secs` | `10` | TLS + negotiation + auth + request |
 | | `connect_timeout_secs` | `10` | |
@@ -96,6 +140,9 @@ Performance note: musl's allocator is slower than glibc's under heavy concurrenc
 | `just cov` | `scripts/coverage.sh`: fails unless 100% of library lines are covered |
 | `just fuzz request 60` | fuzz a parser (`greeting`, `userpass`, `request`, `udp`); needs nightly |
 | `just static` | static musl builds + linkage check |
+| `just packages` | `.deb` + `.rpm` from the static x86_64 binary |
+| `just package-smoke` | install/remove the packages in Debian, Ubuntu, Rocky and Fedora containers |
+| `just package-e2e` | **sudo**: install the `.deb` on this machine, run the hardened service, verify the sandbox, purge |
 
 ### Code layout
 
@@ -117,8 +164,9 @@ Performance note: musl's allocator is slower than glibc's under heavy concurrenc
 - cargo-deny
 - cargo-audit
 - a 60-second fuzz smoke run per parser
+- packaging: build the `.deb`/`.rpm`, gate the unit's exposure score, run install/remove tests in five distro containers, and run the systemd end-to-end test (`scripts/package-e2e.sh`) on the runner
 
-`release.yml` runs on `v*` tags. It builds static x86_64 and aarch64 binaries, checks linkage, smoke-tests the scratch image, and publishes the binaries with SHA-256 sums.
+`release.yml` runs on `v*` tags. It builds static x86_64 and aarch64 binaries plus `.deb` and `.rpm` packages for both, checks linkage, smoke-tests the scratch image, and publishes everything with SHA-256 sums.
 
 ## License
 

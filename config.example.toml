@@ -1,5 +1,6 @@
-# rusty-sock example configuration. Relative paths are resolved against
-# this file's directory.
+# rusty-sock example configuration. Default location:
+# /etc/rusty-sock/config.toml (override with `rusty-sock serve -c PATH`).
+# Relative paths are resolved against this file's directory.
 
 # Address to listen on. Keep loopback unless clients are remote.
 listen = "127.0.0.1:1080"
@@ -9,11 +10,15 @@ listen = "127.0.0.1:1080"
 mode = "password"
 # One `username:$argon2id$...` line per user; create entries with
 #   printf '%s\n' 'the-password' | rusty-sock hash-password
+# Default: the systemd `users` credential if present, else
+# /etc/rusty-sock/users.
 users_file = "users"
 # Required to run mode = "none" on a non-loopback address.
 allow_open_proxy = false
 
 # Optional: serve SOCKS over TLS so credentials are not sent in cleartext.
+# An empty [tls] section uses the `tls-cert`/`tls-key` systemd credentials
+# or /etc/rusty-sock/tls/{cert,key}.pem.
 # [tls]
 # cert = "cert.pem"
 # key = "key.pem"

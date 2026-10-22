@@ -68,6 +68,42 @@ jobs:
       - run: cargo build --locked --release --target x86_64-unknown-linux-musl
       - run: scripts/check-static.sh target/x86_64-unknown-linux-musl/release/rusty-sock
 
+  package:
+    name: deb/rpm build + install tests
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,cargo-deb,cargo-generate-rpm
+      - run: cargo zigbuild --locked --release --target "$TARGET"
+      - run: scripts/check-static.sh "target/$TARGET/release/rusty-sock"
+      - name: Build packages
+        run: |
+          cargo deb --no-build --no-strip --target "$TARGET"
+          cargo generate-rpm --target "$TARGET"
+      - name: Unit hardening (exposure must stay <= 2.0)
+        run: systemd-analyze security --offline=yes --threshold=20 packaging/rusty-sock.service
+      - name: Install/remove in distro containers
+        run: |
+          deb=$(ls target/$TARGET/debian/*.deb)
+          rpm=$(ls target/$TARGET/generate-rpm/*.rpm)
+          for img in debian:12 ubuntu:22.04 ubuntu:24.04; do
+            docker run --rm -v "$PWD/$deb:/pkg/rusty-sock.deb:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/rusty-sock.deb
+          done
+          for img in rockylinux:9 fedora:latest; do
+            docker run --rm -v "$PWD/$rpm:/pkg/rusty-sock.rpm:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/rusty-sock.rpm
+          done
+      - name: systemd end-to-end (DynamicUser, credentials, no capabilities)
+        run: sudo scripts/package-e2e.sh "$(ls target/$TARGET/debian/*.deb)"
+
   msrv:
     runs-on: ubuntu-latest
     steps:

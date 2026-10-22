@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::paths;
 use crate::policy::EgressPolicy;
 
 /// Errors loading or validating configuration.
@@ -31,7 +32,7 @@ pub struct Config {
     /// Authentication settings.
     pub auth: AuthConfig,
     /// Optional TLS listener settings.
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<TlsSection>,
     /// Resource limits and timeouts.
     pub limits: Limits,
     /// Destination filtering.
@@ -70,15 +71,26 @@ pub enum AuthMode {
 pub struct AuthConfig {
     /// Authentication mode.
     pub mode: AuthMode,
-    /// Path to the users file (required for `password` mode).
+    /// Path to the users file. Defaults to the `users` systemd credential
+    /// or `/etc/rusty-sock/users`.
     pub users_file: Option<PathBuf>,
     /// Permit `mode = "none"` on a non-loopback address.
     pub allow_open_proxy: bool,
 }
 
-/// TLS listener settings.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The `[tls]` section. Its presence enables TLS; omitted paths default to
+/// the `tls-cert`/`tls-key` systemd credentials or `/etc/rusty-sock/tls/`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TlsSection {
+    /// PEM certificate chain.
+    pub cert: Option<PathBuf>,
+    /// PEM private key.
+    pub key: Option<PathBuf>,
+}
+
+/// Resolved TLS certificate and key paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsConfig {
     /// PEM certificate chain.
     pub cert: PathBuf,
@@ -214,13 +226,39 @@ impl Config {
     }
 
     fn resolve_paths(&mut self, base: &Path) {
-        if let Some(users) = &mut self.auth.users_file {
-            *users = base.join(&*users);
+        let tls = self.tls.as_mut().map(|t| [&mut t.cert, &mut t.key]);
+        let paths = std::iter::once(&mut self.auth.users_file).chain(tls.into_iter().flatten());
+        for path in paths.flatten() {
+            *path = base.join(&*path);
         }
-        if let Some(tls) = &mut self.tls {
-            tls.cert = base.join(&tls.cert);
-            tls.key = base.join(&tls.key);
-        }
+    }
+
+    /// The users file: explicit, else the `users` credential, else the
+    /// default path.
+    #[must_use]
+    pub fn users_file(&self, creds_dir: Option<&Path>) -> PathBuf {
+        let explicit = self.auth.users_file.as_deref();
+        paths::resolve(explicit, paths::CRED_USERS, paths::DEFAULT_USERS, creds_dir)
+    }
+
+    /// Resolved TLS paths, if `[tls]` is present.
+    #[must_use]
+    pub fn tls_paths(&self, creds_dir: Option<&Path>) -> Option<TlsConfig> {
+        let tls = self.tls.as_ref()?;
+        Some(TlsConfig {
+            cert: paths::resolve(
+                tls.cert.as_deref(),
+                paths::CRED_TLS_CERT,
+                paths::DEFAULT_TLS_CERT,
+                creds_dir,
+            ),
+            key: paths::resolve(
+                tls.key.as_deref(),
+                paths::CRED_TLS_KEY,
+                paths::DEFAULT_TLS_KEY,
+                creds_dir,
+            ),
+        })
     }
 
     /// Check the configuration for unsafe or inconsistent settings.
@@ -230,9 +268,6 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.limits.validate()?;
         match self.auth.mode {
-            AuthMode::Password if self.auth.users_file.is_none() => Err(ConfigError::Invalid(
-                "auth.users_file is required for password auth",
-            )),
             AuthMode::None if self.is_exposed() && !self.auth.allow_open_proxy => {
                 Err(ConfigError::Invalid(
                     "refusing to run without auth on a non-loopback address; set auth.allow_open_proxy = true to override",
@@ -269,12 +304,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_require_users_file() {
-        let err = Config::parse("").unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "invalid config: auth.users_file is required for password auth"
-        );
+    fn empty_config_uses_default_paths() {
+        let c = Config::parse("").unwrap();
+        assert_eq!(c.auth.mode, AuthMode::Password);
+        assert_eq!(c.users_file(None), PathBuf::from(paths::DEFAULT_USERS));
+        assert_eq!(c.tls_paths(None), None);
+    }
+
+    #[test]
+    fn empty_tls_section_uses_defaults_or_credentials() {
+        let c = Config::parse("[tls]\n").unwrap();
+        let tls = c.tls_paths(None).unwrap();
+        assert_eq!(tls.cert, PathBuf::from(paths::DEFAULT_TLS_CERT));
+        assert_eq!(tls.key, PathBuf::from(paths::DEFAULT_TLS_KEY));
+
+        let creds =
+            std::env::temp_dir().join(format!("rusty-sock-cfg-creds-{}", std::process::id()));
+        std::fs::create_dir_all(&creds).unwrap();
+        std::fs::write(creds.join(paths::CRED_TLS_KEY), "").unwrap();
+        std::fs::write(creds.join(paths::CRED_USERS), "").unwrap();
+        let tls = c.tls_paths(Some(&creds)).unwrap();
+        assert_eq!(tls.cert, PathBuf::from(paths::DEFAULT_TLS_CERT));
+        assert_eq!(tls.key, creds.join(paths::CRED_TLS_KEY));
+        assert_eq!(c.users_file(Some(&creds)), creds.join(paths::CRED_USERS));
+        std::fs::remove_dir_all(&creds).unwrap();
     }
 
     #[test]
@@ -374,8 +427,8 @@ mod tests {
         )
         .unwrap();
         let c = Config::load(&path).unwrap();
-        assert_eq!(c.auth.users_file, Some(dir.join("users")));
-        let tls = c.tls.unwrap();
+        assert_eq!(c.users_file(None), dir.join("users"));
+        let tls = c.tls_paths(None).unwrap();
         assert_eq!(tls.cert, dir.join("c.pem"));
         assert_eq!(tls.key, PathBuf::from("/abs/k.pem"));
         assert!(matches!(

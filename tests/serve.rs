@@ -56,16 +56,18 @@ async fn build_errors() {
         Err(rusty_sock::Error::Auth(_))
     ));
 
+    // No users_file: falls back to /etc/rusty-sock/users, which is absent
+    // (or root-only) on test machines.
     config.auth.users_file = None;
     assert!(matches!(
         rusty_sock::build(&config).await,
-        Err(rusty_sock::Error::Config(_))
+        Err(rusty_sock::Error::Auth(_))
     ));
 
     let mut config = Config::parse("[auth]\nmode = \"none\"\n").unwrap();
-    config.tls = Some(rusty_sock::config::TlsConfig {
-        cert: dir.join("nope"),
-        key: dir.join("nope"),
+    config.tls = Some(rusty_sock::config::TlsSection {
+        cert: Some(dir.join("nope")),
+        key: Some(dir.join("nope")),
     });
     assert!(matches!(
         rusty_sock::build(&config).await,
@@ -77,4 +79,18 @@ async fn build_errors() {
     config.listen = taken.local_addr().unwrap();
     let err = rusty_sock::serve(&config, async {}).await.unwrap_err();
     assert!(matches!(err, rusty_sock::Error::Io(_)), "{err}");
+}
+
+#[tokio::test]
+async fn empty_users_file_starts_with_warning() {
+    let dir = temp_dir("empty");
+    std::fs::write(dir.join("users"), "# no users yet\n").unwrap();
+    let mut config = Config::parse("listen = \"127.0.0.1:0\"\n").unwrap();
+    config.auth.users_file = Some(dir.join("users"));
+    let server = rusty_sock::build(&config).await.unwrap();
+    let proxy = server.local_addr().unwrap();
+    tokio::spawn(server.run(std::future::pending()));
+    let mut c = Client::connect(proxy).await;
+    c.greet(&[2]).await;
+    assert_ne!(c.login(USER, PASS).await, 0);
 }

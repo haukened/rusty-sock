@@ -10,6 +10,8 @@ pub mod config;
 pub mod connector;
 pub mod error;
 pub mod listener;
+pub mod logging;
+pub mod paths;
 pub mod policy;
 pub mod proto;
 pub mod relay;
@@ -52,14 +54,10 @@ pub enum Error {
 /// # Errors
 /// Credential, TLS, resolver or bind errors.
 pub async fn build(config: &Config) -> Result<Server, Error> {
-    let auth = match (config.auth.mode, &config.auth.users_file) {
-        (AuthMode::Password, Some(path)) => {
-            Authenticator::Password(Arc::new(CredentialStore::load(path)?))
-        }
-        (AuthMode::Password, None) => {
-            return Err(config::ConfigError::Invalid("auth.users_file is required").into());
-        }
-        (AuthMode::None, _) => Authenticator::None,
+    let creds = paths::credentials_dir();
+    let auth = match config.auth.mode {
+        AuthMode::Password => password_auth(&config.users_file(creds.as_deref()))?,
+        AuthMode::None => Authenticator::None,
     };
     let timeouts = config.limits.timeouts();
     let ctx = Ctx {
@@ -69,8 +67,23 @@ pub async fn build(config: &Config) -> Result<Server, Error> {
         connector: Arc::new(TcpConnector),
         timeouts,
     };
-    let tls = config.tls.as_ref().map(tls::acceptor).transpose()?;
+    let tls = config
+        .tls_paths(creds.as_deref())
+        .map(|t| tls::acceptor(&t))
+        .transpose()?;
     Ok(Server::bind(config.listen, ctx, tls, config.limits.max_connections).await?)
+}
+
+fn password_auth(users_file: &std::path::Path) -> Result<Authenticator, Error> {
+    let store = CredentialStore::load(users_file)?;
+    tracing::info!(path = %users_file.display(), users = store.len(), "loaded users");
+    if store.is_empty() {
+        tracing::warn!(
+            "no users configured: every login will be rejected; add `name:hash` lines \
+             (hash from `rusty-sock hash-password`) to the users file"
+        );
+    }
+    Ok(Authenticator::Password(Arc::new(store)))
 }
 
 /// Log warnings, build the server and run it until `shutdown` resolves.

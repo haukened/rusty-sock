@@ -21,15 +21,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install cargo-zigbuild (bundles zig)
-        run: pip install cargo-zigbuild ziglang
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,cargo-deb,cargo-generate-rpm
       - run: cargo zigbuild --locked --release --target ${{ matrix.target }}
       - run: scripts/check-static.sh target/${{ matrix.target }}/release/rusty-sock
-      - name: Package
+      - name: Build .deb and .rpm
+        run: |
+          cargo deb --no-build --no-strip --target ${{ matrix.target }}
+          cargo generate-rpm --target ${{ matrix.target }}
+      - name: Collect artifacts
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/rusty-sock dist/rusty-sock-${{ matrix.target }}
-          cd dist && sha256sum rusty-sock-${{ matrix.target }} > rusty-sock-${{ matrix.target }}.sha256
+          cp target/${{ matrix.target }}/debian/*.deb target/${{ matrix.target }}/generate-rpm/*.rpm dist/
+          cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done
       - name: Smoke-test scratch image
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |

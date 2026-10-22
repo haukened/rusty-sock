@@ -1,4 +1,4 @@
-//! Editing the users file: `rusty-sock user {create,update,delete,list}`.
+//! Line-preserving, atomic editing of the users file.
 //!
 //! Edits keep comments, blank lines and ordering. The file is replaced
 //! atomically (temp file in the same directory, fsync, rename) and keeps its
@@ -6,87 +6,12 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use zeroize::Zeroizing;
-
-use crate::auth::{AuthError, hash_password, split_entry};
-
-/// The systemd unit restarted by `--restart`.
-pub const UNIT: &str = "rusty-sock.service";
-/// Prompt attempts before giving up on mismatched confirmations.
-pub const MAX_ATTEMPTS: usize = 3;
-
-/// Errors from user management.
-#[derive(Debug, thiserror::Error)]
-pub enum UsersError {
-    /// Reading or writing a file failed.
-    #[error("{path}: {source}{hint}")]
-    Io {
-        /// The file involved.
-        path: PathBuf,
-        /// Underlying error.
-        source: io::Error,
-        /// Extra advice (e.g. to use sudo).
-        hint: &'static str,
-    },
-    /// The existing users file has an invalid line; it is not modified.
-    #[error("{path} line {line}: {reason}; fix it by hand before editing")]
-    Malformed {
-        /// The users file.
-        path: PathBuf,
-        /// 1-based line number.
-        line: usize,
-        /// What was wrong.
-        reason: &'static str,
-    },
-    /// Another edit is in progress (or a previous one crashed).
-    #[error("{0} exists: another edit is in progress; if not, remove it and retry")]
-    Locked(PathBuf),
-    /// The users file does not exist.
-    #[error("{0} does not exist; create a user first")]
-    MissingFile(PathBuf),
-    /// `create` of a user that already exists.
-    #[error("user `{0}` already exists; use `user update` to change the password")]
-    Exists(String),
-    /// `update`/`delete` of a user that does not exist.
-    #[error("no such user `{0}`")]
-    NoSuchUser(String),
-    /// The username is not allowed.
-    #[error("invalid username: {0}")]
-    InvalidName(&'static str),
-    /// The password is empty or too long.
-    #[error("password must be 1-255 bytes")]
-    InvalidPassword,
-    /// The two entered passwords differed too many times.
-    #[error("passwords did not match after {MAX_ATTEMPTS} attempts")]
-    PasswordMismatch,
-    /// The password prompt could not be shown.
-    #[error("cannot prompt for a password ({0}); use --password-stdin")]
-    Prompt(io::Error),
-    /// Hashing failed.
-    #[error(transparent)]
-    Hash(#[from] AuthError),
-    /// The users file was saved but restarting the service failed.
-    #[error("users file updated, but restarting {UNIT} failed: {0}; restart it manually")]
-    Restart(String),
-}
-
-fn io_error(path: &Path, source: io::Error) -> UsersError {
-    let hint = if source.kind() == io::ErrorKind::PermissionDenied {
-        " (try again with sudo)"
-    } else {
-        ""
-    };
-    UsersError::Io {
-        path: path.to_path_buf(),
-        source,
-        hint,
-    }
-}
+use super::{UsersError, io_error, validate_name};
+use crate::auth::split_entry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line {
@@ -302,129 +227,11 @@ fn malformed(path: &Path, idx: usize, reason: &'static str) -> UsersError {
     }
 }
 
-/// Usernames: 1-255 printable ASCII bytes, no whitespace or `:`, and not
-/// starting with `#` (which would read back as a comment).
-///
-/// # Errors
-/// [`UsersError::InvalidName`] describing the problem.
-pub fn validate_name(name: &str) -> Result<(), UsersError> {
-    if name.is_empty() || name.len() > 255 {
-        return Err(UsersError::InvalidName("must be 1-255 bytes"));
-    }
-    if !name.bytes().all(|b| b.is_ascii_graphic() && b != b':') {
-        return Err(UsersError::InvalidName(
-            "use printable ASCII without spaces or `:`",
-        ));
-    }
-    if name.starts_with('#') {
-        return Err(UsersError::InvalidName("must not start with `#`"));
-    }
-    Ok(())
-}
-
-fn validate_password(password: &str) -> Result<(), UsersError> {
-    if password.is_empty() || password.len() > 255 {
-        return Err(UsersError::InvalidPassword);
-    }
-    Ok(())
-}
-
-/// Something that can ask for a password without echoing it.
-pub trait PasswordPrompt {
-    /// Show `prompt` and read one password.
-    ///
-    /// # Errors
-    /// If no terminal is available or reading fails.
-    fn prompt(&mut self, prompt: &str) -> io::Result<Zeroizing<String>>;
-}
-
-/// Ask for a new password twice, retrying on mismatch.
-///
-/// # Errors
-/// [`UsersError::Prompt`], [`UsersError::InvalidPassword`] or
-/// [`UsersError::PasswordMismatch`].
-pub fn prompt_new_password(
-    name: &str,
-    prompt: &mut dyn PasswordPrompt,
-    out: &mut dyn Write,
-) -> Result<Zeroizing<String>, UsersError> {
-    for _ in 0..MAX_ATTEMPTS {
-        let first = prompt
-            .prompt(&format!("Password for {name}: "))
-            .map_err(UsersError::Prompt)?;
-        validate_password(&first)?;
-        let second = prompt
-            .prompt("Confirm password: ")
-            .map_err(UsersError::Prompt)?;
-        if first == second {
-            return Ok(first);
-        }
-        let _ = writeln!(out, "passwords do not match, try again");
-    }
-    Err(UsersError::PasswordMismatch)
-}
-
-/// Read a password as one line from `input` (for `--password-stdin`).
-///
-/// # Errors
-/// I/O errors or [`UsersError::InvalidPassword`].
-pub fn read_password_line(input: &mut dyn BufRead) -> Result<Zeroizing<String>, UsersError> {
-    let mut line = Zeroizing::new(String::new());
-    input
-        .read_line(&mut line)
-        .map_err(|e| io_error(Path::new("<stdin>"), e))?;
-    let password = Zeroizing::new(line.trim_end_matches(['\r', '\n']).to_owned());
-    validate_password(&password)?;
-    Ok(password)
-}
-
-/// Hash a password for the users file.
-///
-/// # Errors
-/// If hashing fails.
-pub fn hash(password: &str) -> Result<String, UsersError> {
-    Ok(hash_password(password.as_bytes())?)
-}
-
-/// What `--restart` did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Restart {
-    /// The service was running and has been restarted.
-    Restarted,
-    /// The service is not running; changes apply when it starts.
-    NotRunning,
-}
-
-/// `systemctl try-restart <unit>`: restart only if running, never start it.
-///
-/// # Errors
-/// [`UsersError::Restart`] if `systemctl` is missing or fails.
-pub fn restart_service(systemctl: &OsStr, unit: &str) -> Result<Restart, UsersError> {
-    let status = Command::new(systemctl)
-        .args(["try-restart", unit])
-        .status()
-        .map_err(|e| UsersError::Restart(format!("cannot run systemctl: {e}")))?;
-    if !status.success() {
-        return Err(UsersError::Restart(format!(
-            "systemctl try-restart {status}"
-        )));
-    }
-    let active = Command::new(systemctl)
-        .args(["is-active", "--quiet", unit])
-        .status()
-        .is_ok_and(|s| s.success());
-    Ok(if active {
-        Restart::Restarted
-    } else {
-        Restart::NotRunning
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::auth::CredentialStore;
-    use std::collections::VecDeque;
+    use crate::users::hash;
     use std::sync::LazyLock;
 
     static HASH_A: LazyLock<String> = LazyLock::new(|| hash("alpha-pass").unwrap());
@@ -527,24 +334,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_names() {
-        for (name, why) in [
-            ("", "must be 1-255 bytes"),
-            (&"x".repeat(256), "must be 1-255 bytes"),
-            ("has space", "use printable ASCII without spaces or `:`"),
-            ("co:lon", "use printable ASCII without spaces or `:`"),
-            ("tab\tname", "use printable ASCII without spaces or `:`"),
-            ("#hash", "must not start with `#`"),
-        ] {
-            assert!(
-                matches!(validate_name(name), Err(UsersError::InvalidName(r)) if r == why),
-                "{name:?}"
-            );
-        }
-        assert!(validate_name("alice.smith-01").is_ok());
-    }
-
-    #[test]
     fn refuses_to_edit_malformed_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("users");
@@ -624,114 +413,5 @@ mod tests {
         );
         assert_eq!(temp_path(Path::new("users")), (p("."), p("./.users.tmp")));
         assert_eq!(temp_path(Path::new("/")), (p("."), p("./.users.tmp")));
-    }
-
-    struct Scripted(VecDeque<io::Result<&'static str>>);
-
-    impl PasswordPrompt for Scripted {
-        fn prompt(&mut self, _: &str) -> io::Result<Zeroizing<String>> {
-            self.0
-                .pop_front()
-                .unwrap_or(Ok(""))
-                .map(|s| Zeroizing::new(s.to_owned()))
-        }
-    }
-
-    fn scripted(answers: &[&'static str]) -> Scripted {
-        Scripted(answers.iter().map(|a| Ok(*a)).collect())
-    }
-
-    #[test]
-    fn prompt_confirms_and_retries() {
-        let mut out = Vec::new();
-        let pw = prompt_new_password(
-            "alice",
-            &mut scripted(&["one", "two", "pw", "pw"]),
-            &mut out,
-        )
-        .unwrap();
-        assert_eq!(pw.as_str(), "pw");
-        assert_eq!(
-            String::from_utf8(out).unwrap(),
-            "passwords do not match, try again\n"
-        );
-    }
-
-    #[test]
-    fn prompt_gives_up_after_max_attempts() {
-        let answers = ["a", "b", "a", "b", "a", "b"];
-        let err =
-            prompt_new_password("alice", &mut scripted(&answers), &mut Vec::new()).unwrap_err();
-        assert!(matches!(err, UsersError::PasswordMismatch));
-    }
-
-    #[test]
-    fn prompt_rejects_empty_and_reports_tty_errors() {
-        let err = prompt_new_password("a", &mut scripted(&[""]), &mut Vec::new()).unwrap_err();
-        assert!(matches!(err, UsersError::InvalidPassword));
-        let mut no_tty = Scripted(VecDeque::from([Err(io::Error::other("no tty"))]));
-        let err = prompt_new_password("a", &mut no_tty, &mut Vec::new()).unwrap_err();
-        assert!(err.to_string().contains("--password-stdin"), "{err}");
-        let mut late = Scripted(VecDeque::from([Ok("pw"), Err(io::Error::other("closed"))]));
-        assert!(matches!(
-            prompt_new_password("a", &mut late, &mut Vec::new()),
-            Err(UsersError::Prompt(_))
-        ));
-    }
-
-    #[test]
-    fn stdin_password_line() {
-        assert_eq!(
-            read_password_line(&mut &b"secret\r\n"[..])
-                .unwrap()
-                .as_str(),
-            "secret"
-        );
-        assert!(matches!(
-            read_password_line(&mut &b"\n"[..]),
-            Err(UsersError::InvalidPassword)
-        ));
-        let long = "x".repeat(256);
-        assert!(matches!(
-            read_password_line(&mut long.as_bytes()),
-            Err(UsersError::InvalidPassword)
-        ));
-        let mut bad = &[0xff, 0xfe, b'\n'][..];
-        assert!(matches!(
-            read_password_line(&mut bad),
-            Err(UsersError::Io { .. })
-        ));
-    }
-
-    fn stub(dir: &Path, script: &str) -> PathBuf {
-        let path = dir.join("systemctl");
-        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    #[test]
-    fn restart_outcomes() {
-        let dir = tempfile::tempdir().unwrap();
-        let running = stub(dir.path(), "exit 0");
-        assert_eq!(
-            restart_service(running.as_os_str(), UNIT).unwrap(),
-            Restart::Restarted
-        );
-
-        let dir2 = tempfile::tempdir().unwrap();
-        let stopped = stub(dir2.path(), "[ \"$1\" = try-restart ]");
-        assert_eq!(
-            restart_service(stopped.as_os_str(), UNIT).unwrap(),
-            Restart::NotRunning
-        );
-
-        let dir3 = tempfile::tempdir().unwrap();
-        let failing = stub(dir3.path(), "exit 1");
-        let err = restart_service(failing.as_os_str(), UNIT).unwrap_err();
-        assert!(err.to_string().contains("users file updated"), "{err}");
-
-        let err = restart_service(OsStr::new("/nonexistent/systemctl"), UNIT).unwrap_err();
-        assert!(err.to_string().contains("cannot run systemctl"), "{err}");
     }
 }

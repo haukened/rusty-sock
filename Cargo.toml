@@ -1,6 +1,6 @@
 [package]
 name = "rusty-sock"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A small, secure SOCKS5 proxy server (RFC 1928 / RFC 1929)"

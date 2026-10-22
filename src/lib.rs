@@ -18,6 +18,7 @@ pub mod relay;
 pub mod resolver;
 pub mod session;
 pub mod tls;
+pub mod users;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -44,9 +45,9 @@ pub enum Error {
     /// I/O problem (binding, resolver setup, stdin/stdout).
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// The password given to `hash-password` was empty or too long.
-    #[error("password must be 1-255 bytes")]
-    InvalidPassword,
+    /// User management problem.
+    #[error(transparent)]
+    Users(#[from] users::UsersError),
 }
 
 /// Build a bound server from a validated config.
@@ -79,8 +80,8 @@ fn password_auth(users_file: &std::path::Path) -> Result<Authenticator, Error> {
     tracing::info!(path = %users_file.display(), users = store.len(), "loaded users");
     if store.is_empty() {
         tracing::warn!(
-            "no users configured: every login will be rejected; add `name:hash` lines \
-             (hash from `rusty-sock hash-password`) to the users file"
+            "no users configured: every login will be rejected; add one with \
+             `sudo rusty-sock user create <name>`"
         );
     }
     Ok(Authenticator::Password(Arc::new(store)))

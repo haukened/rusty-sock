@@ -37,7 +37,10 @@ systemd-analyze security --threshold=20 "$unit" >/dev/null || fail "exposure abo
 ok "unit verified; $(systemd-analyze security "$unit" 2>/dev/null | tail -1 | sed 's/^→ //')"
 
 # Configure: one user, and allow loopback so we can test against a local server.
-echo "e2e:$(printf 'e2e-password\n' | rusty-sock hash-password)" >> /etc/rusty-sock/users
+printf 'e2e-password\n' | rusty-sock user create e2e --password-stdin >/dev/null || fail "user create"
+[ "$(rusty-sock user list)" = "e2e" ] || fail "user list should show only e2e"
+[ "$(stat -c '%a %U:%G' /etc/rusty-sock/users)" = "600 root:root" ] || fail "users file mode changed"
+ok "user created with rusty-sock user create; file still 0600 root:root"
 sed -i 's/^allow_private = false/allow_private = true/' /etc/rusty-sock/config.toml
 
 echo "proxied-ok" > "$webroot/index.html"
@@ -60,6 +63,23 @@ if curl -fsS --max-time 5 -x "socks5h://e2e:wrong@127.0.0.1:1080" "http://127.0.
   fail "wrong password accepted"
 fi
 ok "wrong password rejected"
+
+# --restart applies a password change to the running service.
+old_pid=$(systemctl show -p MainPID --value "$unit")
+out=$(printf 'rotated-password\n' | rusty-sock user update e2e --password-stdin --restart) || fail "user update --restart"
+echo "$out" | grep -q "restarted rusty-sock" || fail "unexpected output: $out"
+new_pid=$(systemctl show -p MainPID --value "$unit")
+[ "$new_pid" != "$old_pid" ] || fail "service was not restarted"
+# Wait for the new process to accept connections.
+for _ in $(seq 1 50); do
+  curl -fsS --max-time 2 -x "socks5h://e2e:rotated-password@127.0.0.1:1080" "http://127.0.0.1:$port/" >/dev/null 2>&1 && break
+  sleep 0.2
+done
+curl -fsS --max-time 5 -x "socks5h://e2e:rotated-password@127.0.0.1:1080" "http://127.0.0.1:$port/" >/dev/null || fail "new password rejected after --restart"
+if curl -fsS --max-time 5 -x "socks5h://e2e:e2e-password@127.0.0.1:1080" "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+  fail "old password still accepted after --restart"
+fi
+ok "user update --restart rotated the password on the running service"
 
 # Sandbox checks on the running process.
 pid=$(systemctl show -p MainPID --value "$unit")

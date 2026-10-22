@@ -34,6 +34,14 @@ echo "$log" | grep -q "listening" || fail "server did not start with default pat
 echo "$log" | grep -q "no users configured" || fail "missing empty-users warning"
 printf '%s' "$log" | grep -q "$(printf '\033')" && fail "ANSI codes in non-tty output"
 
+# Manage a user against the packaged root-only file.
+printf 'smoke-pw\n' | rusty-sock user create smoke --password-stdin >/dev/null || fail "user create"
+[ "$(rusty-sock user list)" = "smoke" ] || fail "user list"
+check_mode "600 root:root" /etc/rusty-sock/users
+rusty-sock user delete smoke >/dev/null || fail "user delete"
+[ -z "$(rusty-sock user list)" ] || fail "user not deleted"
+echo "ok: user create/list/delete on the packaged users file"
+
 case "$pkg" in
   *.deb)
     dpkg -s rusty-sock | grep -q '^Conffiles:' || fail "no conffiles registered"

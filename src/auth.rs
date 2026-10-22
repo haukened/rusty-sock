@@ -112,6 +112,16 @@ impl CredentialStore {
 }
 
 fn parse_line(line: &str) -> Result<Entry, &'static str> {
+    let (user, hash) = split_entry(line)?;
+    Ok(Entry {
+        username: user.as_bytes().to_vec(),
+        hash: hash.to_owned(),
+    })
+}
+
+/// Validate one `username:hash` line and split it. Shared with the users
+/// file editor so both apply exactly the same rules.
+pub(crate) fn split_entry(line: &str) -> Result<(&str, &str), &'static str> {
     let (user, hash) = line.split_once(':').ok_or("expected `username:hash`")?;
     if user.is_empty() || user.len() > 255 {
         return Err("username must be 1-255 bytes");
@@ -120,10 +130,7 @@ fn parse_line(line: &str) -> Result<Entry, &'static str> {
     if parsed.algorithm != argon2::ARGON2ID_IDENT {
         return Err("hash must be argon2id");
     }
-    Ok(Entry {
-        username: user.as_bytes().to_vec(),
-        hash: hash.to_owned(),
-    })
+    Ok((user, hash))
 }
 
 fn verify_hash(hash: &str, password: &[u8]) -> bool {

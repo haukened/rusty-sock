@@ -1,0 +1,19 @@
+# rusty-sock configuration. Full reference:
+#   /usr/share/doc/rusty-sock/config.example.toml
+#
+# Users are read from /etc/rusty-sock/users (passed to the service as a
+# systemd credential). Add users there, then:
+#   systemctl enable --now rusty-sock
+
+listen = "127.0.0.1:1080"
+
+[auth]
+mode = "password"
+
+# Uncomment to serve SOCKS over TLS. Certificate and key default to
+# /etc/rusty-sock/tls/{cert,key}.pem, passed in via the drop-in at
+# /usr/share/doc/rusty-sock/dropins/tls.conf.
+# [tls]
+
+[egress]
+allow_private = false

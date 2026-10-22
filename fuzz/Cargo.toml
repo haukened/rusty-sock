@@ -1,0 +1,43 @@
+[package]
+name = "rusty-sock-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rusty-sock = { path = ".." }
+
+# Keep the fuzz crate out of the main workspace.
+[workspace]
+
+[[bin]]
+name = "greeting"
+path = "fuzz_targets/greeting.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "userpass"
+path = "fuzz_targets/userpass.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "udp"
+path = "fuzz_targets/udp.rs"
+test = false
+doc = false
+bench = false

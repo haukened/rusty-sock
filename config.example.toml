@@ -1,0 +1,43 @@
+# rusty-sock example configuration. Default location:
+# /etc/rusty-sock/config.toml (override with `rusty-sock serve -c PATH`).
+# Relative paths are resolved against this file's directory.
+
+# Address to listen on. Keep loopback unless clients are remote.
+listen = "127.0.0.1:1080"
+
+[auth]
+# "password" (RFC 1929, default) or "none".
+mode = "password"
+# One `username:$argon2id$...` line per user; create entries with
+#   printf '%s\n' 'the-password' | rusty-sock hash-password
+# Default: the systemd `users` credential if present, else
+# /etc/rusty-sock/users.
+users_file = "users"
+# Required to run mode = "none" on a non-loopback address.
+allow_open_proxy = false
+
+# Optional: serve SOCKS over TLS so credentials are not sent in cleartext.
+# An empty [tls] section uses the `tls-cert`/`tls-key` systemd credentials
+# or /etc/rusty-sock/tls/{cert,key}.pem.
+# [tls]
+# cert = "cert.pem"
+# key = "key.pem"
+
+[limits]
+max_connections = 1024
+handshake_timeout_secs = 10
+connect_timeout_secs = 10
+idle_timeout_secs = 300
+dns_timeout_secs = 5
+udp_idle_timeout_secs = 120
+
+[egress]
+# Allow loopback, RFC 1918, link-local (cloud metadata), etc. Leave off
+# unless you trust every client.
+allow_private = false
+# If non-empty, only these destination ports are allowed.
+allowed_ports = []
+
+[dns]
+# Upstream resolvers. Empty means /etc/resolv.conf.
+nameservers = []

@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-llvm-cov
+      - name: Test with coverage (fails below 100% of lines)
+        run: scripts/coverage.sh --locked
+      - name: Upload to Codacy
+        if: ${{ env.CODACY_TOKEN != '' }}
+        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
+        with:
+          project-token: ${{ secrets.CODACY_TOKEN }}
+          coverage-reports: lcov.info
+    env:
+      CODACY_TOKEN: ${{ secrets.CODACY_TOKEN }}
+
+  musl:
+    name: test + static build (musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo test --locked --target x86_64-unknown-linux-musl
+      - run: cargo build --locked --release --target x86_64-unknown-linux-musl
+      - run: scripts/check-static.sh target/x86_64-unknown-linux-musl/release/rusty-sock
+
+  package:
+    name: deb/rpm build + install tests
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-zigbuild,cargo-deb,cargo-generate-rpm
+      - run: cargo zigbuild --locked --release --target "$TARGET"
+      - run: scripts/check-static.sh "target/$TARGET/release/rusty-sock"
+      - name: Build packages
+        run: |
+          cargo deb --no-build --no-strip --target "$TARGET"
+          cargo generate-rpm --target "$TARGET"
+      - name: Unit hardening (exposure must stay <= 2.0)
+        run: systemd-analyze security --offline=yes --threshold=20 packaging/rusty-sock.service
+      - name: Install/remove in distro containers
+        run: |
+          deb=$(ls target/$TARGET/debian/*.deb)
+          rpm=$(ls target/$TARGET/generate-rpm/*.rpm)
+          for img in debian:12 ubuntu:22.04 ubuntu:24.04; do
+            docker run --rm -v "$PWD/$deb:/pkg/rusty-sock.deb:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/rusty-sock.deb
+          done
+          for img in rockylinux:9 fedora:latest; do
+            docker run --rm -v "$PWD/$rpm:/pkg/rusty-sock.rpm:ro" -v "$PWD/scripts:/s:ro" "$img" /s/package-smoke.sh /pkg/rusty-sock.rpm
+          done
+      - name: systemd end-to-end (DynamicUser, credentials, no capabilities)
+        run: sudo scripts/package-e2e.sh "$(ls target/$TARGET/debian/*.deb)"
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo check --locked --all-targets
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [greeting, userpass, request, udp]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-fuzz
+      # cargo-fuzz defaults to its own build target (musl for the prebuilt
+      # binary), which has no sanitizer runtime; fuzz on the gnu host.
+      - run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=60
